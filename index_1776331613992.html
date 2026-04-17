@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>FacultyEval — Faculty Evaluation System</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -451,7 +452,7 @@ tr:hover td{background:#F8FAFF}
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <div class="refresh-indicator"><span class="refresh-dot"></span><span>Auto-refresh on</span></div>
-        <button class="btn btn-ghost btn-sm" onclick="exportTeacherResults()">📤 Export PDF</button>
+        <button class="btn btn-ghost btn-sm" id="btn-tch-export" onclick="exportTeacherResults()">📤 Export PDF</button>
       </div>
     </div>
 
@@ -609,7 +610,7 @@ tr:hover td{background:#F8FAFF}
     <div id="panel-results" style="display:none">
       <div class="export-bar">
         <span style="font-size:12px;font-weight:600;color:var(--t2)">Detailed Evaluation Results</span>
-        <button class="btn btn-ghost btn-sm" onclick="printResults()">🖨️ Print Report</button>
+        <button class="btn btn-ghost btn-sm" id="btn-adm-print" onclick="printResults()">🖨️ Print Report</button>
         <button class="btn btn-ghost btn-sm" onclick="exportResultsExcel()">📊 Export Excel</button>
       </div>
       <div id="results-wrap"></div>
@@ -763,6 +764,166 @@ function getSectionValue(selId,inputId){
   if(sel.value==='__new__')return($(inputId)?.value||'').trim();
   return sel.value.trim();
 }
+
+// ── MOBILE DETECTION ──
+function isMobile(){
+  return/Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)||(window.innerWidth<1024&&'ontouchstart'in window);
+}
+function isIOS(){return/iPhone|iPad|iPod/i.test(navigator.userAgent);}
+function updateMobileButtons(){
+  if(!isMobile())return;
+  const btnT=$('btn-tch-export');if(btnT)btnT.textContent='📥 Download PDF';
+  const btnP=$('btn-adm-print');if(btnP)btnP.textContent='📥 Download PDF';
+}
+
+// ── PDF BUILDER HELPERS ──
+function pdfY(doc,y,needed,margin){
+  if(y+needed>doc.internal.pageSize.getHeight()-margin){doc.addPage();return margin+16;}
+  return y;
+}
+
+function buildTeacherPDF(doc){
+  const fac=getFaculty().find(f=>f.id===ME.facultyId);if(!fac)return;
+  const evs=getTeacherEvs(false);
+  const avg=evs.length?(evs.reduce((s,e)=>s+e.overall,0)/evs.length).toFixed(2):null;
+  const M=40,PW=doc.internal.pageSize.getWidth(),LH=18;let y=M;
+  // Top bar
+  doc.setFillColor(79,107,222);doc.rect(0,0,PW,7,'F');
+  // Title
+  doc.setFont('helvetica','bold');doc.setFontSize(18);doc.setTextColor(30,42,74);
+  doc.text('Faculty Evaluation Report',M,y+12);y+=LH*2.2;
+  // Meta
+  doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(90,106,138);
+  doc.text(`${fac.name}  ·  ${fac.subject}  ·  Section: ${fac.section}`,M,y);y+=LH;
+  doc.text(`Generated: ${new Date().toLocaleString()}  ·  Total Evaluations: ${evs.length}`,M,y);y+=LH;
+  doc.setDrawColor(221,229,245);doc.line(M,y,PW-M,y);y+=LH;
+  if(!evs.length){
+    doc.setFont('helvetica','italic');doc.setFontSize(11);doc.setTextColor(90,106,138);
+    doc.text('No evaluations submitted yet.',M,y);return;
+  }
+  // Score summary box
+  doc.setFillColor(238,242,255);doc.roundedRect(M,y,PW-M*2,52,6,6,'F');
+  doc.setFont('helvetica','bold');doc.setFontSize(26);doc.setTextColor(79,107,222);
+  doc.text(avg,M+14,y+32);
+  const sw=doc.getTextWidth(avg);
+  doc.setFontSize(11);doc.setTextColor(30,42,74);doc.text('/ 5.0  Overall Rating',M+14+sw+5,y+32);
+  doc.setFont('helvetica','normal');doc.setFontSize(9.5);doc.setTextColor(90,106,138);
+  doc.text(`${evs.length} student evaluations  ·  ${pct(avg)}% score  ·  ${evs.filter(e=>e.comment).length} comments`,M+14,y+46);
+  y+=52+LH;
+  // Per-question table
+  doc.setFont('helvetica','bold');doc.setFontSize(10);doc.setTextColor(90,106,138);
+  doc.text('AVERAGE SCORE PER CATEGORY',M,y);y+=LH*0.8;
+  doc.setFillColor(238,242,255);doc.rect(M,y,PW-M*2,18,'F');
+  doc.setFontSize(8.5);doc.setTextColor(30,42,74);
+  doc.text('#',M+6,y+13);doc.text('Category',M+24,y+13);doc.text('Question',M+150,y+13);doc.text('Avg',PW-M-36,y+13);
+  y+=18;
+  QUESTIONS.forEach((q,i)=>{
+    y=pdfY(doc,y,20,M);
+    const qa=(evs.reduce((s,e)=>s+(e.ratings[i]||0),0)/evs.length).toFixed(2);
+    if(i%2===0){doc.setFillColor(248,250,255);doc.rect(M,y,PW-M*2,20,'F');}
+    doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(30,42,74);
+    doc.text(String(i+1),M+6,y+14);doc.text(Q_SHORT[i],M+24,y+14);
+    const qt=doc.splitTextToSize(q,PW-M*2-180);
+    doc.setFontSize(8);doc.setTextColor(90,106,138);doc.text(qt[0],M+150,y+14);
+    const sc=parseFloat(qa)>=4?[28,166,112]:parseFloat(qa)>=3?[79,107,222]:[245,158,11];
+    doc.setFont('helvetica','bold');doc.setFontSize(9.5);doc.setTextColor(...sc);doc.text(`${qa}/5`,PW-M-36,y+14);
+    y+=20;
+  });
+  doc.setDrawColor(221,229,245);doc.line(M,y,PW-M,y);y+=LH;
+  // Distribution
+  y=pdfY(doc,y,30,M);
+  doc.setFont('helvetica','bold');doc.setFontSize(10);doc.setTextColor(90,106,138);doc.text('RATING DISTRIBUTION',M,y);y+=LH*0.9;
+  const dist={1:0,2:0,3:0,4:0,5:0};
+  evs.forEach(e=>dist[Math.round(e.overall)]=(dist[Math.round(e.overall)]||0)+1);
+  [5,4,3,2,1].forEach(v=>{
+    y=pdfY(doc,y,15,M);
+    const count=dist[v]||0,p=evs.length?Math.round(count/evs.length*100):0;
+    const lbl=['','Poor','Fair','Good','Very Good','Excellent'][v];
+    doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(30,42,74);doc.text(`${v}★ ${lbl}`,M,y+10);
+    doc.setFillColor(240,244,250);doc.roundedRect(M+90,y+3,130,8,3,3,'F');
+    if(p>0){const dc={5:[28,166,112],4:[79,107,222],3:[245,158,11],2:[249,115,22],1:[229,75,106]};doc.setFillColor(...dc[v]);doc.roundedRect(M+90,y+3,130*p/100,8,3,3,'F');}
+    doc.setTextColor(90,106,138);doc.setFontSize(8.5);doc.text(`${count} (${p}%)`,M+230,y+10);y+=15;
+  });
+  y+=LH;
+  // Comments
+  const cmts=evs.filter(e=>e.comment);
+  if(cmts.length){
+    y=pdfY(doc,y,28,M);
+    doc.setFont('helvetica','bold');doc.setFontSize(10);doc.setTextColor(90,106,138);doc.text(`ANONYMOUS COMMENTS (${cmts.length})`,M,y);y+=LH;
+    cmts.forEach(e=>{
+      const lines=doc.splitTextToSize(`"${e.comment}"`,PW-M*2-22);
+      const bH=lines.length*13+14;y=pdfY(doc,y,bH+8,M);
+      doc.setFillColor(248,250,255);doc.roundedRect(M,y,PW-M*2,bH,4,4,'F');
+      doc.setFillColor(79,107,222);doc.rect(M,y,3,bH,'F');
+      doc.setFont('helvetica','italic');doc.setFontSize(9);doc.setTextColor(30,42,74);doc.text(lines,M+12,y+12);
+      doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(154,170,192);doc.text(fmtShortDate(e.date),PW-M-58,y+bH-5);
+      y+=bH+8;
+    });
+  }
+  // Footer on each page
+  const tp=doc.internal.getNumberOfPages();
+  for(let i=1;i<=tp;i++){
+    doc.setPage(i);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(154,170,192);
+    doc.text('FacultyEval — Confidential Evaluation Report',M,doc.internal.pageSize.getHeight()-18);
+    doc.text(`Page ${i} of ${tp}`,PW-M-50,doc.internal.pageSize.getHeight()-18);
+  }
+}
+
+function buildAdminPDF(doc){
+  const fac=getFaculty(),evs=getEvals();
+  const M=40,PW=doc.internal.pageSize.getWidth(),LH=18;let y=M;
+  doc.setFillColor(79,107,222);doc.rect(0,0,PW,7,'F');
+  doc.setFont('helvetica','bold');doc.setFontSize(18);doc.setTextColor(30,42,74);
+  doc.text('FacultyEval — Admin Results Report',M,y+12);y+=LH*2.2;
+  doc.setFont('helvetica','normal');doc.setFontSize(10);doc.setTextColor(90,106,138);
+  doc.text(`Generated: ${new Date().toLocaleString()}  ·  Total evaluations: ${evs.length}  ·  Faculty: ${fac.length}`,M,y);y+=LH;
+  doc.setDrawColor(221,229,245);doc.line(M,y,PW-M,y);y+=LH*1.2;
+  fac.forEach((f,fi)=>{
+    const fe=evs.filter(e=>e.facultyId===f.id);
+    const avg=fe.length?(fe.reduce((s,e)=>s+e.overall,0)/fe.length).toFixed(2):null;
+    y=pdfY(doc,y,48,M);
+    doc.setFillColor(238,242,255);doc.roundedRect(M,y,PW-M*2,36,5,5,'F');
+    doc.setFont('helvetica','bold');doc.setFontSize(12);doc.setTextColor(30,42,74);doc.text(f.name,M+12,y+15);
+    doc.setFont('helvetica','normal');doc.setFontSize(9);doc.setTextColor(90,106,138);
+    doc.text(`${f.subject}  ·  Section: ${f.section}  ·  ${fe.length} eval${fe.length!==1?'s':''}${avg?'  ·  Avg: '+avg+'/5':''}`,M+12,y+28);
+    y+=36+8;
+    if(!fe.length){
+      doc.setFont('helvetica','italic');doc.setFontSize(9);doc.setTextColor(90,106,138);doc.text('No evaluations submitted yet.',M+12,y);y+=LH*1.5;
+    } else {
+      doc.setFillColor(238,242,255);doc.rect(M,y,PW-M*2,16,'F');
+      doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(30,42,74);doc.text('Category',M+6,y+12);doc.text('Average',PW-M-46,y+12);y+=16;
+      QUESTIONS.forEach((q,i)=>{
+        y=pdfY(doc,y,16,M);
+        const qa=(fe.reduce((s,e)=>s+(e.ratings[i]||0),0)/fe.length).toFixed(2);
+        if(i%2===0){doc.setFillColor(248,250,255);doc.rect(M,y,PW-M*2,16,'F');}
+        doc.setFont('helvetica','normal');doc.setFontSize(8.5);doc.setTextColor(30,42,74);doc.text(Q_SHORT[i],M+6,y+12);
+        const sc=parseFloat(qa)>=4?[28,166,112]:parseFloat(qa)>=3?[79,107,222]:[245,158,11];
+        doc.setFont('helvetica','bold');doc.setTextColor(...sc);doc.text(`${qa}/5.0`,PW-M-46,y+12);y+=16;
+      });
+      doc.setDrawColor(221,229,245);doc.line(M,y,PW-M,y);y+=6;
+      const cmts=fe.filter(e=>e.comment);
+      if(cmts.length){
+        doc.setFont('helvetica','bold');doc.setFontSize(8.5);doc.setTextColor(90,106,138);doc.text(`Comments (${cmts.length}):`,M,y+10);y+=LH;
+        cmts.forEach(e=>{
+          const lines=doc.splitTextToSize(`"${e.comment}"`,PW-M*2-18);
+          const bH=lines.length*12+10;y=pdfY(doc,y,bH+6,M);
+          doc.setFillColor(248,250,255);doc.roundedRect(M,y,PW-M*2,bH,3,3,'F');
+          doc.setFillColor(79,107,222);doc.rect(M,y,3,bH,'F');
+          doc.setFont('helvetica','italic');doc.setFontSize(8.5);doc.setTextColor(30,42,74);doc.text(lines,M+10,y+11);y+=bH+6;
+        });
+      }
+    }
+    y+=LH*0.5;
+    if(fi<fac.length-1){y=pdfY(doc,y,18,M);doc.setDrawColor(221,229,245);doc.line(M,y,PW-M,y);y+=LH;}
+  });
+  const tp=doc.internal.getNumberOfPages();
+  for(let i=1;i<=tp;i++){
+    doc.setPage(i);doc.setFont('helvetica','normal');doc.setFontSize(8);doc.setTextColor(154,170,192);
+    doc.text('FacultyEval — Admin Report — Confidential',M,doc.internal.pageSize.getHeight()-18);
+    doc.text(`Page ${i} of ${tp}`,PW-M-50,doc.internal.pageSize.getHeight()-18);
+  }
+}
+
 function barColor(avg){const n=parseFloat(avg);if(n>=4.5)return'rgba(28,166,112,.82)';if(n>=3.5)return'rgba(79,107,222,.82)';if(n>=2.5)return'rgba(245,158,11,.82)';return'rgba(229,75,106,.82)';}
 function fmtDate(iso){if(!iso)return'—';const d=new Date(iso);return d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'});}
 function fmtShortDate(iso){if(!iso)return'—';const d=new Date(iso);return d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});}
@@ -850,6 +1011,7 @@ function doLogin(){
   $('nav-refresh-ind').style.display='';
   startRefresh();
 
+  updateMobileButtons();
   if(ME.role==='student'){
     $('nav-anon-id').textContent='ID: '+ME.anonId;
     $('nav-anon-id').style.display='';
@@ -1274,6 +1436,15 @@ function exportTeacherResults(){
   if(!fac){alert('Faculty record not found.');return;}
   const evs=getTeacherEvs(false);
   if(!evs.length){alert('No evaluations to export yet.');return;}
+  if(isMobile()){
+    if(!window.jspdf){alert('PDF generator is loading, please try again in a moment.');return;}
+    const {jsPDF}=window.jspdf;
+    const doc=new jsPDF({unit:'pt',format:'a4'});
+    buildTeacherPDF(doc);
+    doc.save(`FacultyEval_${fac.name.replace(/\s+/g,'_')}.pdf`);
+    return;
+  }
+  // Desktop: open print dialog
   const avg=(evs.reduce((s,e)=>s+e.overall,0)/evs.length).toFixed(2);
   let html=`<html><head><title>FacultyEval — ${fac.name}</title><style>
     body{font-family:Arial,sans-serif;padding:30px;color:#1E2A4A;font-size:13px;max-width:800px;margin:0 auto}
@@ -1281,20 +1452,15 @@ function exportTeacherResults(){
     h2{font-size:14px;color:#4F6BDE;margin:18px 0 7px;text-transform:uppercase;letter-spacing:.05em}
     .meta{font-size:11px;color:#5A6A8A;margin-bottom:18px}
     .score-box{background:#EEF2FF;border-radius:10px;padding:14px;margin-bottom:16px;display:flex;gap:18px;flex-wrap:wrap}
-    .score-item{text-align:center}<div class="score-item">
-    .score-val{font-size:28px;font-weight:800;color:#4F6BDE}
-    .score-lbl{font-size:11px;color:#5A6A8A}
+    .score-item{text-align:center}.score-val{font-size:28px;font-weight:800;color:#4F6BDE}.score-lbl{font-size:11px;color:#5A6A8A}
     table{width:100%;border-collapse:collapse;margin-bottom:14px}
     th,td{border:1px solid #DDE5F5;padding:8px 11px;text-align:left;font-size:12px}
     th{background:#EEF2FF;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
     .comment{background:#F8FAFF;border-left:3px solid #4F6BDE;padding:6px 10px;margin-bottom:6px;font-style:italic;font-size:11px;border-radius:3px}
     @media print{body{padding:10px}}
   </style></head><body>
-    <h1>📋 Faculty Evaluation Report</h1>
-    <div class="meta">
-      <strong>${fac.name}</strong> · ${fac.subject} · Section: ${fac.section}<br>
-      Generated: ${new Date().toLocaleString()} · Total Evaluations: ${evs.length}
-    </div>
+    <h1>Faculty Evaluation Report</h1>
+    <div class="meta"><strong>${fac.name}</strong> · ${fac.subject} · Section: ${fac.section}<br>Generated: ${new Date().toLocaleString()} · Total Evaluations: ${evs.length}</div>
     <div class="score-box">
       <div class="score-item"><div class="score-val">${avg}</div><div class="score-lbl">Overall Rating (/5)</div></div>
       <div class="score-item"><div class="score-val">${evs.length}</div><div class="score-lbl">Total Evaluations</div></div>
@@ -1302,10 +1468,8 @@ function exportTeacherResults(){
       <div class="score-item"><div class="score-val">${evs.filter(e=>e.comment).length}</div><div class="score-lbl">Comments</div></div>
     </div>
     <h2>Average Score Per Category</h2>
-    <table>
-      <thead><tr><th>#</th><th>Category</th><th>Question</th><th>Average</th></tr></thead>
-      <tbody>${QUESTIONS.map((q,i)=>{const qa=(evs.reduce((s,e)=>s+(e.ratings[i]||0),0)/evs.length).toFixed(2);return`<tr><td>${i+1}</td><td>${Q_SHORT[i]}</td><td>${q}</td><td><strong>${qa} / 5.0</strong></td></tr>`;}).join('')}</tbody>
-    </table>
+    <table><thead><tr><th>#</th><th>Category</th><th>Question</th><th>Average</th></tr></thead>
+    <tbody>${QUESTIONS.map((q,i)=>{const qa=(evs.reduce((s,e)=>s+(e.ratings[i]||0),0)/evs.length).toFixed(2);return`<tr><td>${i+1}</td><td>${Q_SHORT[i]}</td><td>${q}</td><td><strong>${qa}/5.0</strong></td></tr>`;}).join('')}</tbody></table>
     <h2>Rating Distribution</h2>
     <table><thead><tr><th>Rating</th><th>Count</th><th>Percentage</th></tr></thead><tbody>
     ${[5,4,3,2,1].map(v=>{const c=evs.filter(e=>Math.round(e.overall)===v).length;return`<tr><td>${v}★ ${['','Poor','Fair','Good','Very Good','Excellent'][v]}</td><td>${c}</td><td>${evs.length?Math.round(c/evs.length*100):0}%</td></tr>`;}).join('')}
@@ -1314,6 +1478,7 @@ function exportTeacherResults(){
   </body></html>`;
   const w=window.open('','_blank');
   if(w){w.document.write(html);w.document.close();w.focus();setTimeout(()=>w.print(),600);}
+  else{alert('Pop-up blocked. Please allow pop-ups for this page and try again.');}
 }
 
 // ══════════════════════════════════════════════
@@ -1524,12 +1689,22 @@ function renderResults(){
 }
 function printResults(){
   const fac=getFaculty(),evs=getEvals();
+  if(!fac.length){alert('No faculty data to print.');return;}
+  if(isMobile()){
+    if(!window.jspdf){alert('PDF generator is loading, please try again in a moment.');return;}
+    const {jsPDF}=window.jspdf;
+    const doc=new jsPDF({unit:'pt',format:'a4'});
+    buildAdminPDF(doc);
+    doc.save(`FacultyEval_AdminReport_${new Date().toISOString().slice(0,10)}.pdf`);
+    return;
+  }
+  // Desktop: open print dialog
   let html=`<html><head><title>FacultyEval Report</title><style>body{font-family:Arial,sans-serif;padding:28px;color:#1E2A4A;font-size:12px}h1{font-size:19px;border-bottom:3px solid #4F6BDE;padding-bottom:7px}h2{font-size:13px;color:#4F6BDE;margin:18px 0 6px;text-transform:uppercase}table{width:100%;border-collapse:collapse;margin-bottom:12px}th,td{border:1px solid #DDE5F5;padding:7px 10px;text-align:left;font-size:11px}th{background:#EEF2FF;font-weight:700}.meta{font-size:10px;color:#5A6A8A;margin-bottom:18px}.comment{background:#F8FAFF;border-left:3px solid #4F6BDE;padding:5px 9px;margin:3px 0;font-style:italic;font-size:11px}@media print{body{padding:0}}</style></head><body>
-  <h1>📋 FacultyEval — Admin Results Report</h1><div class="meta">Generated: ${new Date().toLocaleString()} · Total evaluations: ${evs.length}</div>`;
+  <h1>FacultyEval — Admin Results Report</h1><div class="meta">Generated: ${new Date().toLocaleString()} · Total evaluations: ${evs.length}</div>`;
   fac.forEach(f=>{
     const fe=evs.filter(e=>e.facultyId===f.id);
     const avg=fe.length?(fe.reduce((s,e)=>s+e.overall,0)/fe.length).toFixed(2):'N/A';
-    html+=`<h2>${f.name} — ${f.subject} (${f.section})</h2><table><tr><th>Evaluations</th><th>Overall Avg</th></tr><tr><td>${fe.length}</td><td>${avg} / 5.0</td></tr></table>`;
+    html+=`<h2>${f.name} — ${f.subject} (${f.section})</h2><table><tr><th>Evaluations</th><th>Overall Avg</th></tr><tr><td>${fe.length}</td><td>${avg}/5.0</td></tr></table>`;
     if(fe.length){
       html+=`<table><tr><th>Category</th><th>Avg</th></tr>`;
       QUESTIONS.forEach((q,i)=>{const qa=(fe.reduce((s,e)=>s+(e.ratings[i]||0),0)/fe.length).toFixed(2);html+=`<tr><td>${Q_SHORT[i]}</td><td>${qa}/5</td></tr>`;});
@@ -1539,7 +1714,9 @@ function printResults(){
     }
   });
   html+='</body></html>';
-  const w=window.open('','_blank');if(w){w.document.write(html);w.document.close();w.focus();setTimeout(()=>w.print(),600);}
+  const w=window.open('','_blank');
+  if(w){w.document.write(html);w.document.close();w.focus();setTimeout(()=>w.print(),600);}
+  else{alert('Pop-up blocked. Please allow pop-ups for this page and try again.');}
 }
 function exportResultsExcel(){
   const fac=getFaculty(),evs=getEvals();
@@ -1556,10 +1733,26 @@ function exportResultsExcel(){
     const row=[f.name,f.subject,f.section,fe.length,avg,...qAvgs,fe.filter(e=>e.comment).length];
     csv+=row.map(v=>'"'+String(v===undefined||v===null?'':v).replace(/"/g,'""')+'"').join(',')+'\n';
   });
-  const a=document.createElement('a');
-  a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
-  a.download='FacultyEval_Report_'+new Date().toISOString().slice(0,10)+'.csv';
-  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  const filename='FacultyEval_Report_'+new Date().toISOString().slice(0,10)+'.csv';
+  if(isIOS()){
+    // iOS Safari: open in new tab so user can share/save
+    const w=window.open('data:text/csv;charset=utf-8,'+encodeURIComponent(csv),'_blank');
+    if(!w){alert('Pop-up blocked. Please allow pop-ups for this page.');}
+  } else {
+    // Android Chrome + Desktop: Blob URL download
+    try{
+      const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');a.href=url;a.download=filename;a.style.display='none';
+      document.body.appendChild(a);a.click();
+      setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},1500);
+    }catch(e){
+      // Fallback: data URI
+      const a=document.createElement('a');
+      a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+      a.download=filename;document.body.appendChild(a);a.click();document.body.removeChild(a);
+    }
+  }
 }
 
 // ── DELETE ──
